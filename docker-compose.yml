@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  delivery-robot:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./assets:/app/assets:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

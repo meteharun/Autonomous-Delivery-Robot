@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autonomous Delivery Robot</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2em;
+            color: #00d9ff;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 20px;
+        }
+        
+        .main-content {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .grid-container {
+            flex: 1;
+            min-width: 600px;
+            background: #1e1e2e;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        }
+        
+        .grid-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .status-item {
+            background: #2a2a3e;
+            padding: 8px 15px;
+            border-radius: 8px;
+            font-size: 0.9em;
+        }
+        
+        .status-item span {
+            color: #00d9ff;
+            font-weight: bold;
+        }
+        
+        .status-item.stuck {
+            background: #e74c3c;
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        #grid {
+            display: grid;
+            gap: 1px;
+            background: #555;
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 0 auto;
+            border: 2px solid #555;
+        }
+        
+        .cell {
+            width: 47px;
+            height: 47px;
+            background: #E8DCC4;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            position: relative;
+            transition: background-color 0.1s;
+            user-select: none;
+        }
+        
+        .cell:hover {
+            background-color: #d4c9a8;
+            outline: 2px solid #00d9ff;
+            z-index: 10;
+        }
+        
+        .cell:active {
+            background-color: #c0b598;
+        }
+        
+        .cell img {
+            width: 85%;
+            height: 85%;
+            object-fit: contain;
+        }
+        
+        .cell img.robot-img {
+            width: 95%;
+            height: 95%;
+            z-index: 20;
+            position: relative;
+        }
+        
+        .cell.obstacle {
+            background: #E8DCC4;
+        }
+        
+        .cell.dynamic-obstacle {
+            background: #FFB366;
+        }
+        
+        .cell.base {
+            background: #E8DCC4;
+        }
+        
+        .cell .delivery-number {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            background: #e74c3c;
+            color: white;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            font-size: 12px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 5;
+        }
+        
+        .cell .pending-icon {
+            position: absolute;
+            bottom: 2px;
+            right: 2px;
+            width: 18px;
+            height: 18px;
+            z-index: 4;
+        }
+        
+        #path-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 2;
+        }
+        
+        .path-overlay {
+            display: none;
+        }
+        
+        .sidebar {
+            width: 280px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .panel {
+            background: #1e1e2e;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        }
+        
+        .panel h3 {
+            color: #00d9ff;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+        }
+        
+        .legend-item img {
+            width: 28px;
+            height: 28px;
+            object-fit: contain;
+        }
+        
+        .legend-color {
+            width: 28px;
+            height: 28px;
+            border-radius: 4px;
+            border: 1px solid #444;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: bold;
+            transition: transform 0.1s, box-shadow 0.2s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .btn-reset {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            color: white;
+        }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        
+        .metric {
+            background: #2a2a3e;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .metric-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #00d9ff;
+        }
+        
+        .metric-label {
+            font-size: 0.8em;
+            color: #888;
+            margin-top: 5px;
+        }
+        
+        .countdown {
+            text-align: center;
+            padding: 15px;
+            background: #2a2a3e;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        
+        .countdown-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #f39c12;
+        }
+        
+        .countdown-label {
+            font-size: 0.9em;
+            color: #888;
+        }
+        
+        .instructions {
+            font-size: 0.85em;
+            color: #888;
+            line-height: 1.6;
+        }
+        
+        .instructions strong {
+            color: #00d9ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Autonomous Delivery Robot</h1>
+        <p class="subtitle">MAPE-K Self-Adaptive System Simulation</p>
+        
+        <div class="main-content">
+            <div class="grid-container">
+                <div class="grid-header">
+                    <div class="status-bar">
+                        <div class="status-item">Position: <span id="robot-pos">(1, 1)</span></div>
+                        <div class="status-item">Loaded: <span id="loaded-count">0</span>/3</div>
+                        <div class="status-item">Pending: <span id="pending-count">0</span></div>
+                        <div class="status-item" id="stuck-status" style="display: none;">⚠️ STUCK</div>
+                    </div>
+                </div>
+                <div id="grid-wrapper" style="position: relative; display: inline-block;">
+                    <canvas id="path-canvas"></canvas>
+                    <div id="grid"></div>
+                </div>
+            </div>
+            
+            <div class="sidebar">
+                <div class="panel">
+                    <h3>⏱️ Mission Countdown</h3>
+                    <div class="countdown">
+                        <div class="countdown-value" id="countdown">-</div>
+                        <div class="countdown-label">Until auto-start</div>
+                    </div>
+                    <div class="controls">
+                        <button class="btn btn-reset" onclick="resetSimulation()">🔄 Reset</button>
+                    </div>
+                </div>
+                
+                <div class="panel">
+                    <h3>📊 Metrics</h3>
+                    <div class="metrics-grid">
+                        <div class="metric">
+                            <div class="metric-value" id="total-deliveries">0</div>
+                            <div class="metric-label">Deliveries</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value" id="total-distance">0</div>
+                            <div class="metric-label">Distance</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value" id="replans">0</div>
+                            <div class="metric-label">Replans</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value" id="avg-time">0s</div>
+                            <div class="metric-label">Avg Time</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="panel">
+                    <h3>📍 Legend</h3>
+                    <div class="legend-item">
+                        <img src="/assets/robot.png" alt="Robot">
+                        <span>Delivery Robot</span>
+                    </div>
+                    <div class="legend-item">
+                        <img src="/assets/supermarket.png" alt="Supermarket">
+                        <span>Supermarket (Base)</span>
+                    </div>
+                    <div class="legend-item">
+                        <img src="/assets/house.png" alt="House">
+                        <span>House (Click to order)</span>
+                    </div>
+                    <div class="legend-item">
+                        <img src="/assets/pending.png" alt="Pending">
+                        <span>Pending Order</span>
+                    </div>
+                    <div class="legend-item">
+                        <img src="/assets/tree.png" alt="Tree">
+                        <span>Tree (Static)</span>
+                    </div>
+                    <div class="legend-item">
+                        <img src="/assets/roadblock.png" alt="Roadblock">
+                        <span>Roadblock (Click to toggle)</span>
+                    </div>
+                </div>
+                
+                <div class="panel">
+                    <h3>📖 Instructions</h3>
+                    <div class="instructions">
+                        <p><strong>Click on a house</strong> to add a delivery order.</p>
+                        <p><strong>Click on an empty road</strong> to place/remove a roadblock.</p>
+                        <p>Robot starts delivery when <strong>3 orders</strong> are pending or after <strong>30 seconds</strong>.</p>
+                        <p>Numbers show <strong>delivery order</strong> (1 = first).</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const socket = io();
+        let gridWidth = 25;
+        let gridHeight = 15;
+        const CELL_SIZE = 47;
+        const GAP = 1;
+        
+        // Cell type constants
+        const EMPTY = 0;
+        const OBSTACLE = 1;
+        const BASE = 2;
+        const DELIVERY_LOCATION = 3;
+        
+        socket.on('connect', () => {
+            console.log('Connected to server');
+        });
+        
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+        });
+        
+        socket.on('state_update', (state) => {
+            updateGrid(state);
+            updateUI(state);
+            drawPath(state);
+        });
+        
+        function drawPath(state) {
+            const canvas = document.getElementById('path-canvas');
+            const grid = document.getElementById('grid');
+            const ctx = canvas.getContext('2d');
+            
+            // Wait for grid to be fully rendered
+            if (!grid || grid.children.length === 0) return;
+            
+            // Set canvas size to match grid
+            const gridRect = grid.getBoundingClientRect();
+            canvas.width = gridRect.width;
+            canvas.height = gridRect.height;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const path = state.current_path;
+            if (!path || path.length < 2) return;
+            
+            // Validate path coordinates
+            for (let i = 0; i < path.length; i++) {
+                if (!path[i] || path[i].length !== 2 || 
+                    typeof path[i][0] !== 'number' || typeof path[i][1] !== 'number' ||
+                    path[i][0] < 0 || path[i][0] >= state.height ||
+                    path[i][1] < 0 || path[i][1] >= state.width) {
+                    return; // Invalid path, don't draw
+                }
+            }
+            
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            const cellWidth = CELL_SIZE + GAP;
+            const OFFSET = 5;
+            
+            // Helper function to get cell center with directional offset
+            function getCellCenterWithOffset(row, col, prevRow, prevCol, nextRow, nextCol, isBlue) {
+                const centerX = col * cellWidth + CELL_SIZE / 2;
+                const centerY = row * cellWidth + CELL_SIZE / 2;
+                
+                let offsetX = 0;
+                let offsetY = 0;
+                
+                let dx = 0, dy = 0;
+                
+                if (nextRow !== null && nextCol !== null) {
+                    dx = nextCol - col;
+                    dy = nextRow - row;
+                } else if (prevRow !== null && prevCol !== null) {
+                    dx = col - prevCol;
+                    dy = row - prevRow;
+                }
+                
+                if (dx !== 0 || dy !== 0) {
+                    if (isBlue) {
+                        offsetX = -dy * OFFSET;
+                        offsetY = dx * OFFSET;
+                    } else {
+                        offsetX = dy * OFFSET;
+                        offsetY = -dx * OFFSET;
+                    }
+                }
+                
+                return { x: centerX + offsetX, y: centerY + offsetY };
+            }
+            
+            // Get delivery sequence info
+            const deliverySeq = state.delivery_sequence || {};
+            const seqKeys = Object.keys(deliverySeq);
+            
+            // If no deliveries left (returning), we need to find where the return path starts
+            if (seqKeys.length === 0) {
+                // Use last_delivery_location to find where return path starts
+                if (!state.last_delivery_location) {
+                    // No last delivery info, just draw entire path as red
+                    ctx.strokeStyle = '#E74C3C';
+                    ctx.beginPath();
+                    for (let i = 0; i < path.length; i++) {
+                        const x = path[i][1] * cellWidth + CELL_SIZE / 2;
+                        const y = path[i][0] * cellWidth + CELL_SIZE / 2;
+                        if (i === 0) ctx.moveTo(x, y);
+                        else ctx.lineTo(x, y);
+                    }
+                    ctx.stroke();
+                    return;
+                }
+                
+                const lastDeliveryKey = `${state.last_delivery_location[0]},${state.last_delivery_location[1]}`;
+                
+                // Find the LAST occurrence of last_delivery_location in path
+                // (the one in the return portion, not the delivery portion)
+                let returnStartIndex = -1;
+                for (let i = path.length - 1; i >= 0; i--) {
+                    const key = `${path[i][0]},${path[i][1]}`;
+                    if (key === lastDeliveryKey) {
+                        returnStartIndex = i;
+                        break;
+                    }
+                }
+                
+                // If last delivery not in path (replan during return), draw entire path as red
+                if (returnStartIndex === -1) {
+                    ctx.strokeStyle = '#E74C3C';
+                    ctx.beginPath();
+                    for (let i = 0; i < path.length; i++) {
+                        const x = path[i][1] * cellWidth + CELL_SIZE / 2;
+                        const y = path[i][0] * cellWidth + CELL_SIZE / 2;
+                        if (i === 0) ctx.moveTo(x, y);
+                        else ctx.lineTo(x, y);
+                    }
+                    ctx.stroke();
+                    return;
+                }
+                
+                // Find robot's position ONLY within the return path (from returnStartIndex to end)
+                const robotKey = `${state.robot_position[0]},${state.robot_position[1]}`;
+                let robotIndex = -1;
+                for (let i = returnStartIndex; i < path.length; i++) {
+                    const key = `${path[i][0]},${path[i][1]}`;
+                    if (key === robotKey) {
+                        robotIndex = i;
+                        break;
+                    }
+                }
+                
+                // If robot not found in return path, draw entire path as red
+                if (robotIndex === -1) {
+                    ctx.strokeStyle = '#E74C3C';
+                    ctx.beginPath();
+                    for (let i = 0; i < path.length; i++) {
+                        const x = path[i][1] * cellWidth + CELL_SIZE / 2;
+                        const y = path[i][0] * cellWidth + CELL_SIZE / 2;
+                        if (i === 0) ctx.moveTo(x, y);
+                        else ctx.lineTo(x, y);
+                    }
+                    ctx.stroke();
+                    return;
+                }
+                
+                // Draw red from robot's current position to base
+                ctx.strokeStyle = '#E74C3C';
+                ctx.beginPath();
+                for (let i = robotIndex; i < path.length; i++) {
+                    const x = path[i][1] * cellWidth + CELL_SIZE / 2;
+                    const y = path[i][0] * cellWidth + CELL_SIZE / 2;
+                    if (i === robotIndex) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+                return;
+            }
+            
+            // Still delivering - find last delivery location
+            let lastDeliveryKey = null;
+            let maxNum = 0;
+            for (const key of seqKeys) {
+                if (deliverySeq[key] > maxNum) {
+                    maxNum = deliverySeq[key];
+                    lastDeliveryKey = key;
+                }
+            }
+            
+            // Find the index of last delivery in the path
+            let lastDeliveryIndex = -1;
+            if (lastDeliveryKey) {
+                for (let i = 0; i < path.length; i++) {
+                    const key = `${path[i][0]},${path[i][1]}`;
+                    if (key === lastDeliveryKey) {
+                        lastDeliveryIndex = i;
+                        break;
+                    }
+                }
+            }
+            
+            // If no delivery found, draw all blue
+            if (lastDeliveryIndex === -1) {
+                ctx.strokeStyle = '#3498DB';
+                ctx.beginPath();
+                for (let i = 0; i < path.length; i++) {
+                    const x = path[i][1] * cellWidth + CELL_SIZE / 2;
+                    const y = path[i][0] * cellWidth + CELL_SIZE / 2;
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+                return;
+            }
+            
+            // Draw RED first (last delivery -> base)
+            if (lastDeliveryIndex < path.length - 1) {
+                ctx.strokeStyle = '#E74C3C';
+                ctx.beginPath();
+                for (let i = lastDeliveryIndex; i < path.length; i++) {
+                    const prevRow = i > lastDeliveryIndex ? path[i-1][0] : null;
+                    const prevCol = i > lastDeliveryIndex ? path[i-1][1] : null;
+                    const nextRow = i < path.length - 1 ? path[i+1][0] : null;
+                    const nextCol = i < path.length - 1 ? path[i+1][1] : null;
+                    const pos = getCellCenterWithOffset(path[i][0], path[i][1], prevRow, prevCol, nextRow, nextCol, false);
+                    if (i === lastDeliveryIndex) ctx.moveTo(pos.x, pos.y);
+                    else ctx.lineTo(pos.x, pos.y);
+                }
+                ctx.stroke();
+            }
+            
+            // Draw BLUE (base -> last delivery)
+            ctx.strokeStyle = '#3498DB';
+            ctx.beginPath();
+            for (let i = 0; i <= lastDeliveryIndex; i++) {
+                const prevRow = i > 0 ? path[i-1][0] : null;
+                const prevCol = i > 0 ? path[i-1][1] : null;
+                const nextRow = i < lastDeliveryIndex ? path[i+1][0] : null;
+                const nextCol = i < lastDeliveryIndex ? path[i+1][1] : null;
+                const pos = getCellCenterWithOffset(path[i][0], path[i][1], prevRow, prevCol, nextRow, nextCol, true);
+                if (i === 0) ctx.moveTo(pos.x, pos.y);
+                else ctx.lineTo(pos.x, pos.y);
+            }
+            ctx.stroke();
+        }
+        
+        function updateGrid(state) {
+            const gridEl = document.getElementById('grid');
+            gridEl.innerHTML = '';
+            gridEl.style.gridTemplateColumns = `repeat(${state.width}, 47px)`;
+            
+            gridWidth = state.width;
+            gridHeight = state.height;
+            
+            const deliverySet = new Set(state.delivery_locations.map(loc => `${loc[0]},${loc[1]}`));
+            const pendingSet = new Set(state.pending_locations.map(loc => `${loc[0]},${loc[1]}`));
+            const dynamicSet = new Set(state.dynamic_obstacles.map(loc => `${loc[0]},${loc[1]}`));
+            
+            for (let row = 0; row < state.height; row++) {
+                for (let col = 0; col < state.width; col++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    
+                    const key = `${row},${col}`;
+                    const cellType = state.grid[row][col];
+                    
+                    // Check if this is part of the 2x2 supermarket area
+                    const isBaseArea = (row <= 1 && col <= 1);
+                    const isRobotHere = state.robot_position[0] === row && state.robot_position[1] === col;
+                    
+                    // Draw cell content
+                    if (isRobotHere) {
+                        // Robot - always on top
+                        const img = document.createElement('img');
+                        img.src = '/assets/robot.png';
+                        img.className = 'robot-img';
+                        img.draggable = false;
+                        cell.appendChild(img);
+                    } else if (isBaseArea && row === 0 && col === 0) {
+                        // Supermarket (only draw once at 0,0)
+                        const img = document.createElement('img');
+                        img.src = '/assets/supermarket.png';
+                        img.style.width = '200%';
+                        img.style.height = '200%';
+                        img.style.position = 'absolute';
+                        img.style.top = '0';
+                        img.style.left = '0';
+                        img.style.zIndex = '3';
+                        img.style.pointerEvents = 'none';
+                        img.draggable = false;
+                        cell.appendChild(img);
+                    } else if (dynamicSet.has(key)) {
+                        // Dynamic obstacle
+                        cell.classList.add('dynamic-obstacle');
+                        const img = document.createElement('img');
+                        img.src = '/assets/roadblock.png';
+                        img.draggable = false;
+                        cell.appendChild(img);
+                    } else if (cellType === OBSTACLE) {
+                        // Tree
+                        cell.classList.add('obstacle');
+                        const img = document.createElement('img');
+                        img.src = '/assets/tree.png';
+                        img.draggable = false;
+                        cell.appendChild(img);
+                    } else if (deliverySet.has(key)) {
+                        // House
+                        const img = document.createElement('img');
+                        img.src = '/assets/house.png';
+                        img.draggable = false;
+                        cell.appendChild(img);
+                        
+                        // Check for delivery sequence number (from current state)
+                        if (state.delivery_sequence && state.delivery_sequence[key]) {
+                            const numEl = document.createElement('div');
+                            numEl.className = 'delivery-number';
+                            numEl.textContent = state.delivery_sequence[key];
+                            cell.appendChild(numEl);
+                        }
+                        // Check for pending
+                        else if (pendingSet.has(key)) {
+                            const pendingImg = document.createElement('img');
+                            pendingImg.src = '/assets/pending.png';
+                            pendingImg.className = 'pending-icon';
+                            pendingImg.draggable = false;
+                            cell.appendChild(pendingImg);
+                        }
+                    }
+                    
+                    // Add click handler with closure to capture row/col
+                    (function(r, c) {
+                        cell.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleCellClick(r, c);
+                        });
+                    })(row, col);
+                    
+                    gridEl.appendChild(cell);
+                }
+            }
+        }
+        
+        function updateUI(state) {
+            document.getElementById('robot-pos').textContent = `(${state.robot_position[0]}, ${state.robot_position[1]})`;
+            document.getElementById('loaded-count').textContent = state.loaded_orders;
+            document.getElementById('pending-count').textContent = state.pending_count;
+            document.getElementById('countdown').textContent = state.countdown;
+            
+            // Stuck status
+            const stuckEl = document.getElementById('stuck-status');
+            stuckEl.style.display = state.is_stuck ? 'block' : 'none';
+            
+            // Metrics
+            document.getElementById('total-deliveries').textContent = state.metrics.total_deliveries;
+            document.getElementById('total-distance').textContent = state.metrics.total_distance;
+            document.getElementById('replans').textContent = state.metrics.replans;
+            document.getElementById('avg-time').textContent = state.metrics.avg_delivery_time.toFixed(1) + 's';
+        }
+        
+        function handleCellClick(row, col) {
+            console.log('Clicking cell:', row, col);
+            socket.emit('click', { row: row, col: col });
+        }
+        
+        function resetSimulation() {
+            socket.emit('reset');
+        }
+    </script>
+</body>
+</html>
