@@ -8,9 +8,6 @@ import time
 import eventlet
 eventlet.monkey_patch()
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from environment.grid_world import GridWorld
 from environment.robot import Robot, Order
 from mape_k.knowledge import Knowledge
@@ -221,8 +218,7 @@ def index():
 
 @app.route('/assets/<path:filename>')
 def serve_assets(filename):
-    assets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assets')
-    return send_from_directory(assets_dir, filename)
+    return send_from_directory('/app/assets', filename)
 
 
 @app.route('/api/state')

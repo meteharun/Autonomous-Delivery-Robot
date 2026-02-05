@@ -90,26 +90,32 @@ autonomous-delivery-robot/
 │   ├── pending.png
 │   ├── tree.png
 │   └── roadblock.png
-├── environment/                 # Environment components
-│   ├── __init__.py
-│   ├── grid_world.py           # 2D grid map (22x15)
-│   └── robot.py                # Robot entity
-├── mape_k/                      # MAPE-K components
-│   ├── __init__.py
-│   ├── knowledge.py            # Knowledge base
-│   ├── monitor.py              # Monitor component
-│   ├── analyze.py              # Analyze component
-│   ├── plan.py                 # Plan component
-│   └── execute.py              # Execute component
-├── utils/                       # Utilities
-│   ├── __init__.py
-│   └── pathfinding.py          # A* algorithm & optimal delivery planner
-├── web/                         # Web interface
-│   ├── app.py                  # Flask + Socket.IO server
-│   └── templates/
-│       └── index.html          # Web UI
-├── requirements.txt             # Dependencies
-├── Dockerfile
+├── services/                    # Dockerized MAPE-K components
+│   ├── environment/             # Environment components
+│   │   ├── Dockerfile
+│   │   ├── grid_world.py       # 2D grid map (22x15)
+│   │   └── robot.py            # Robot entity
+│   ├── knowledge/               # Knowledge base
+│   │   ├── Dockerfile
+│   │   └── knowledge.py
+│   ├── monitor/                 # Monitor component
+│   │   ├── Dockerfile
+│   │   └── monitor.py
+│   ├── analyze/                 # Analyze component
+│   │   ├── Dockerfile
+│   │   └── analyze.py
+│   ├── plan/                    # Plan component
+│   │   ├── Dockerfile
+│   │   ├── plan.py
+│   │   └── pathfinding.py      # A* algorithm & optimal delivery planner
+│   ├── execute/                 # Execute component
+│   │   ├── Dockerfile
+│   │   └── execute.py
+│   └── web/                     # Web interface
+│       ├── Dockerfile
+│       ├── app.py              # Flask + Socket.IO server
+│       └── templates/
+│           └── index.html      # Web UI
 ├── docker-compose.yml
 └── README.md
 ```
@@ -124,7 +130,7 @@ autonomous-delivery-robot/
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/autonomous-delivery-robot.git
+   git clone https://github.com/meteharun/autonomous-delivery-robot.git
    cd autonomous-delivery-robot
    ```
 

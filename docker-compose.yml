@@ -1,8 +1,40 @@
 version: '3.8'
 
 services:
-  delivery-robot:
-    build: .
+  environment:
+    build:
+      context: ./services/environment
+    image: delivery-robot-environment
+
+  knowledge:
+    build:
+      context: ./services/knowledge
+    image: delivery-robot-knowledge
+
+  monitor:
+    build:
+      context: ./services/monitor
+    image: delivery-robot-monitor
+
+  analyze:
+    build:
+      context: ./services/analyze
+    image: delivery-robot-analyze
+
+  plan:
+    build:
+      context: ./services/plan
+    image: delivery-robot-plan
+
+  execute:
+    build:
+      context: ./services/execute
+    image: delivery-robot-execute
+
+  web:
+    build:
+      context: .
+      dockerfile: services/web/Dockerfile
     ports:
       - "5000:5000"
     volumes:
