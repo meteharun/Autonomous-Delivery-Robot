@@ -1,36 +1,92 @@
 version: '3.8'
 
 services:
-  environment:
-    build:
-      context: ./services/environment
-    image: delivery-robot-environment
+  # MQTT Broker
+  mqtt:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
+  # Knowledge Service
   knowledge:
     build:
-      context: ./services/knowledge
-    image: delivery-robot-knowledge
+      context: .
+      dockerfile: services/knowledge/Dockerfile
+    environment:
+      - MQTT_BROKER=mqtt
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    restart: unless-stopped
 
+  # Environment Service
+  environment:
+    build:
+      context: .
+      dockerfile: services/environment/Dockerfile
+    environment:
+      - MQTT_BROKER=mqtt
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Monitor Service
   monitor:
     build:
-      context: ./services/monitor
-    image: delivery-robot-monitor
+      context: .
+      dockerfile: services/monitor/Dockerfile
+    environment:
+      - MQTT_BROKER=mqtt
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    restart: unless-stopped
 
+  # Analyze Service
   analyze:
     build:
-      context: ./services/analyze
-    image: delivery-robot-analyze
+      context: .
+      dockerfile: services/analyze/Dockerfile
+    environment:
+      - MQTT_BROKER=mqtt
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    restart: unless-stopped
 
+  # Plan Service
   plan:
     build:
-      context: ./services/plan
-    image: delivery-robot-plan
+      context: .
+      dockerfile: services/plan/Dockerfile
+    environment:
+      - MQTT_BROKER=mqtt
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    restart: unless-stopped
 
+  # Execute Service
   execute:
     build:
-      context: ./services/execute
-    image: delivery-robot-execute
+      context: .
+      dockerfile: services/execute/Dockerfile
+    environment:
+      - MQTT_BROKER=mqtt
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    restart: unless-stopped
 
+  # Web Service
   web:
     build:
       context: .
@@ -40,5 +96,12 @@ services:
     volumes:
       - ./assets:/app/assets:ro
     environment:
-      - PYTHONUNBUFFERED=1
+      - MQTT_BROKER=mqtt
+    depends_on:
+      - knowledge
+      - environment
+      - monitor
+      - analyze
+      - plan
+      - execute
     restart: unless-stopped

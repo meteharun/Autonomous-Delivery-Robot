@@ -1,4 +1,10 @@
 FROM python:3.11-slim
+
 WORKDIR /app
-COPY execute.py .
-CMD ["python", "-c", "print('Execute component')"]
+
+RUN pip install --no-cache-dir paho-mqtt==1.6.1
+
+COPY services/shared /app/shared
+COPY services/execute/service.py /app/service.py
+
+CMD ["python", "-u", "service.py"]

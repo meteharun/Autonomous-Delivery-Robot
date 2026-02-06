@@ -1,9 +1,10 @@
 # Autonomous Delivery Robot 🤖
 
-A self-adaptive autonomous delivery robot simulation implementing the **MAPE-K (Monitor, Analyze, Plan, Execute, Knowledge)** architecture for autonomic computing.
+A self-adaptive autonomous delivery robot simulation implementing the **MAPE-K (Monitor, Analyze, Plan, Execute, Knowledge)** architecture as a microservices system with MQTT-based communication.
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
 ![Flask](https://img.shields.io/badge/Flask-3.0-green.svg)
+![MQTT](https://img.shields.io/badge/MQTT-Mosquitto-purple.svg)
 ![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
@@ -11,16 +12,16 @@ A self-adaptive autonomous delivery robot simulation implementing the **MAPE-K (
 
 ## 📋 Table of Contents
 
-
-- [Overview](#🎯-overview)
-- [Features](#✨-features)
-- [Architecture](#🏗️-architecture)
-- [Project Structure](#📁-project-structure)
-- [Installation](#🚀-installation)
-- [Usage](#🎮-usage)
-- [MAPE-K Components](#🔧-mape-k-components)
-- [Metrics & Config](#📊-metrics)
-- [Contributors](#👥-developed-by)
+- [Overview](#-overview)
+- [Features](#-features)
+- [Architecture](#-architecture)
+- [Project Structure](#-project-structure)
+- [Installation](#-installation)
+- [Usage](#-usage)
+- [MAPE-K Components](#-mape-k-components)
+- [MQTT Topics](#-mqtt-topics)
+- [Metrics & Config](#-metrics)
+- [Contributors](#-developed-by)
 
 ## 🎯 Overview
 
@@ -32,6 +33,8 @@ The system demonstrates key concepts of **self-adaptive systems**:
 - Dynamic path planning using A* algorithm
 - Execution of movement and delivery actions
 - Knowledge base maintaining system state
+
+**Key architectural feature**: Each MAPE-K component runs as an independent Docker container, communicating exclusively via MQTT publish/subscribe messaging. This enables **runtime replacement** of any component without affecting others.
 
 ## ✨ Features
 
@@ -49,34 +52,66 @@ The system demonstrates key concepts of **self-adaptive systems**:
   - Auto-start after 3 orders OR 30-second timeout
   - Capacity-based loading (max 3 orders)
 - **Metrics Tracking**: Distance traveled, deliveries completed, replans count, average delivery time
+- **Microservices Architecture**: Each MAPE-K component is independently deployable and replaceable at runtime
 
 ## 🏗️ Architecture
 
-The system uses a **centralized MAPE-K loop** architecture:
+The system uses a **centralized MAPE-K loop** with **MQTT-based microservices**:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Autonomic Manager                            │
+│                        MQTT Broker (Mosquitto)                      │
 │                                                                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐             │
-│  │ Monitor  │─►│ Analyze  │─►│   Plan   │─►│ Execute  │             │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘             │
-│       │             │             │             │                   │
-│       │ writes      │ reads       │ reads       │ updates           │
-│       ▼             ▼             ▼             ▼                   │
+│    mape/monitor/result    mape/analyze/result    mape/plan/result   │
+│           │                      │                      │           │
+│           ▼                      ▼                      ▼           │
+│  ┌──────────┐  ────────► ┌──────────┐ ────────► ┌──────────┐        │
+│  │ Monitor  │            │ Analyze  │           │   Plan   │        │
+│  │ Service  │            │ Service  │           │ Service  │        │
+│  └──────────┘            └──────────┘           └──────────┘        │
+│       │                                               │             │
+│       │ subscribes to                                 │             │
+│       │ knowledge/update                              ▼             │
+│       │ environment/update              ┌──────────────────┐        │
+│       │                                 │ Execute Service  │        │
+│       ▼                                 └────────┬─────────┘        │
+│  ┌──────────────────┐                            │                  │
+│  │ Knowledge Service │◄───── knowledge/set ──────┘                  │
+│  └──────────────────┘                            │                  │
+│       │                                          │                  │
+│       │ knowledge/update                         │ environment/*    │
+│       ▼                                          ▼                  │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                        Knowledge                             │   │
-│  │                    (pure data storage)                       │   │
+│  │                    Environment Service                       │   │
+│  │                     (Grid + Robot)                           │   │
 │  └──────────────────────────────────────────────────────────────┘   │
-│       ▲                           ▲             │                   │
-│       │ sensors                   │ pathfinding │ effectors         │
-└───────┼───────────────────────────┼─────────────┼───────────────────┘
-        │                           │             │
-        │                           │             ▼
-┌───────┴───────────────────────────┴─────────────┴───────────────────┐
-│                           Environment                               │
-│                       (Grid World + Robot)                          │
+│                              │                                      │
+│                              │ environment/update                   │
+│                              ▼                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │                       Web Service                            │   │
+│  │                  (UI + Loop Trigger)                         │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
+```
+
+### MAPE-K Message Flow
+
+```
+Web triggers ──► mape/monitor/request
+                        │
+                        ▼
+              Monitor publishes ──► mape/monitor/result
+                                           │
+                                           ▼
+                                 Analyze publishes ──► mape/analyze/result
+                                                              │
+                                                              ▼
+                                                    Plan publishes ──► mape/plan/result
+                                                                              │
+                                                                              ▼
+                                                                    Execute commands
+                                                                    environment & knowledge
 ```
 
 ## 📁 Project Structure
@@ -90,33 +125,36 @@ autonomous-delivery-robot/
 │   ├── pending.png
 │   ├── tree.png
 │   └── roadblock.png
-├── services/                    # Dockerized MAPE-K components
-│   ├── environment/             # Environment components
+├── services/
+│   ├── shared/                  # Shared utilities
+│   │   ├── __init__.py
+│   │   ├── mqtt_client.py      # MQTT client wrapper
+│   │   └── state_models.py     # State data structures
+│   ├── knowledge/               # Knowledge service
 │   │   ├── Dockerfile
-│   │   ├── grid_world.py       # 2D grid map (22x15)
-│   │   └── robot.py            # Robot entity
-│   ├── knowledge/               # Knowledge base
+│   │   └── service.py
+│   ├── environment/             # Environment service (Grid + Robot)
 │   │   ├── Dockerfile
-│   │   └── knowledge.py
-│   ├── monitor/                 # Monitor component
+│   │   └── service.py
+│   ├── monitor/                 # Monitor service
 │   │   ├── Dockerfile
-│   │   └── monitor.py
-│   ├── analyze/                 # Analyze component
+│   │   └── service.py
+│   ├── analyze/                 # Analyze service
 │   │   ├── Dockerfile
-│   │   └── analyze.py
-│   ├── plan/                    # Plan component
+│   │   └── service.py
+│   ├── plan/                    # Plan service (A* pathfinding)
 │   │   ├── Dockerfile
-│   │   ├── plan.py
-│   │   └── pathfinding.py      # A* algorithm & optimal delivery planner
-│   ├── execute/                 # Execute component
+│   │   └── service.py
+│   ├── execute/                 # Execute service
 │   │   ├── Dockerfile
-│   │   └── execute.py
-│   └── web/                     # Web interface
+│   │   └── service.py
+│   └── web/                     # Web service (UI + orchestration)
 │       ├── Dockerfile
-│       ├── app.py              # Flask + Socket.IO server
+│       ├── service.py
 │       └── templates/
-│           └── index.html      # Web UI
+│           └── index.html
 ├── docker-compose.yml
+├── mosquitto.conf               # MQTT broker configuration
 └── README.md
 ```
 
@@ -144,19 +182,26 @@ autonomous-delivery-robot/
    http://localhost:5000
    ```
 
-4. **Stop the container**
+4. **Stop the containers**
    ```bash
    docker-compose down
    ```
 
-### Alternative: Run with Docker directly
-```bash
-# Build the image
-docker build -t delivery-robot .
+### Runtime Component Replacement
 
-# Run the container
-docker run -p 5000:5000 delivery-robot
+One of the key features of this architecture is **runtime replaceability**. To replace a component:
+
+```bash
+# Stop only the plan service
+docker-compose stop plan
+
+# Modify services/plan/service.py (e.g., change algorithm)
+
+# Rebuild and restart only the plan service
+docker-compose up --build plan
 ```
+
+The other services continue running and will automatically use the updated Plan service when it reconnects to MQTT.
 
 ## 🎮 Usage
 
@@ -197,31 +242,62 @@ docker run -p 5000:5000 delivery-robot
 
 ## 🔧 MAPE-K Components
 
-### Monitor (`mape_k/monitor.py`)
-- Collects sensor data: robot position, obstacles, orders
-- Detects path blockages
-- Tracks environmental changes
+Each component runs as an independent Docker container:
 
-### Analyze (`mape_k/analyze.py`)
+### Monitor (`services/monitor/service.py`)
+- Subscribes to: `knowledge/update`, `environment/update`, `mape/monitor/request`
+- Publishes to: `mape/monitor/result`
+- Collects sensor data: robot position, obstacles, orders
+- Detects path blockages and environmental changes
+
+### Analyze (`services/analyze/service.py`)
+- Subscribes to: `mape/monitor/result`
+- Publishes to: `mape/analyze/result`
 - Evaluates if adaptation is needed
 - Detects mission triggers (capacity/timeout)
-- Identifies stuck states
 - Determines replanning requirements
 
-### Plan (`mape_k/plan.py`)
-- Creates optimal delivery sequences
-- Generates paths using A* algorithm
+### Plan (`services/plan/service.py`)
+- Subscribes to: `mape/analyze/result`
+- Publishes to: `mape/plan/result`
+- Creates optimal delivery sequences using A* algorithm
 - Handles replanning when blocked
 
-### Execute (`mape_k/execute.py`)
+### Execute (`services/execute/service.py`)
+- Subscribes to: `mape/plan/result`, `knowledge/update`, `environment/update`
+- Publishes to: `knowledge/set`, `environment/*` commands
 - Issues movement commands
 - Handles order loading/delivery
-- Manages mission lifecycle
 
-### Knowledge (`mape_k/knowledge.py`)
-- Stores map, robot state, orders
-- Maintains delivery sequence and original last delivery
-- Tracks metrics (distance, time, replans)
+### Knowledge (`services/knowledge/service.py`)
+- Subscribes to: `system/init`, `system/reset`, `user/add_order`, `knowledge/set`
+- Publishes to: `knowledge/update`
+- Stores system state: orders, plan, metrics
+- Pure data storage with no logic
+
+### Environment (`services/environment/service.py`)
+- Subscribes to: `system/init`, `system/reset`, `user/toggle_obstacle`, `environment/*`
+- Publishes to: `environment/update`
+- Manages Grid and Robot state
+
+## 📡 MQTT Topics
+
+| Topic | Publisher | Subscribers | Purpose |
+|-------|-----------|-------------|---------|
+| `system/init` | Web | Knowledge, Environment | Initialize system |
+| `system/reset` | Web | All services | Reset simulation |
+| `user/add_order` | Web | Knowledge | Add delivery order |
+| `user/toggle_obstacle` | Web | Environment | Add/remove roadblock |
+| `mape/monitor/request` | Web | Monitor | Trigger monitoring cycle |
+| `mape/monitor/result` | Monitor | Analyze | Sensor data & conditions |
+| `mape/analyze/result` | Analyze | Plan | Adaptation decision |
+| `mape/plan/result` | Plan | Execute | Action with path/sequence |
+| `knowledge/update` | Knowledge | Monitor, Execute, Web | Current system state |
+| `knowledge/set` | Execute | Knowledge | Update state fields |
+| `environment/update` | Environment | Monitor, Execute, Web | Grid and robot state |
+| `environment/move_robot` | Execute | Environment | Move command |
+| `environment/load_order` | Execute | Environment | Load order command |
+| `environment/deliver_order` | Execute | Environment | Deliver command |
 
 ## 📊 Metrics
 
@@ -237,10 +313,10 @@ Key parameters in the code:
 
 | Parameter | Location | Default | Description |
 |-----------|----------|---------|-------------|
-| Grid size | `grid_world.py` | 22x15 | Map dimensions |
-| Max capacity | `app.py` | 3 | Orders per mission |
-| Mission timeout | `knowledge.py` | 30s | Auto-start timer |
-| Robot speed | `app.py` | 0.4s | Step delay |
+| Grid size | `state_models.py` | 22x15 | Map dimensions |
+| Max capacity | `state_models.py` | 3 | Orders per mission |
+| Mission timeout | `state_models.py` | 30s | Auto-start timer |
+| Robot speed | `web/service.py` | 0.4s | MAPE-K loop interval |
 
 ## 👥 Developed by
 
