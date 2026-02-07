@@ -1,61 +1,71 @@
 """
 Execute Service - Executes plans by commanding effectors.
-Listens to: PLAN_RESULT
-Publishes to: EXECUTE_RESULT, environment commands, knowledge updates
 """
-import sys
+import paho.mqtt.client as mqtt
+import json
 import time
+import uuid
+import os
 
-sys.path.insert(0, '/app')
-from shared.mqtt_client import MQTTClient, Topics
+# Load config
+with open('/app/config.json') as f:
+    CONFIG = json.load(f)
 
-# Cached state
-knowledge = None
-grid = None
+BROKER = os.environ.get('MQTT_BROKER', CONFIG['mqtt']['broker'])
+PORT = CONFIG['mqtt']['port']
+TOPICS = CONFIG['topics']
 
 OBSTACLE = 1
 
-
-def handle_knowledge_update(payload):
-    global knowledge
-    knowledge = payload
-
-
-def handle_environment_update(payload):
-    global grid
-    grid = payload.get('grid', {})
+# State cache
+knowledge = None
+grid = None
+client = None
 
 
-def handle_plan_result(payload):
-    """Execute the plan."""
-    action = payload.get('action')
-    details = payload.get('details')
+def handle_message(client_obj, userdata, msg):
+    global knowledge, grid, client
     
-    if action == 'continue':
-        execute_continue()
-    elif action == 'start_mission':
-        execute_start_mission(details)
-    elif action == 'replan':
-        execute_replan(details)
-    elif action == 'deliver':
-        execute_delivery(details)
-    elif action == 'end_mission':
-        execute_end_mission()
-    elif action == 'wait':
-        execute_wait(details)
-    else:
-        print(f"[Execute] Unknown action: {action}")
+    try:
+        topic = msg.topic
+        payload = json.loads(msg.payload.decode('utf-8')) if msg.payload else {}
+        
+        if topic == TOPICS['knowledge_update']:
+            knowledge = payload
+        
+        elif topic == TOPICS['environment_update']:
+            grid = payload.get('grid', {})
+        
+        elif topic == TOPICS['plan_result']:
+            action = payload.get('action')
+            
+            if action == 'continue':
+                execute_continue()
+            elif action == 'start_mission':
+                execute_start(payload)
+            elif action == 'replan':
+                execute_replan(payload)
+            elif action == 'deliver':
+                execute_deliver(payload)
+            elif action == 'end_mission':
+                execute_end()
+            elif action == 'wait':
+                execute_wait(payload)
+    
+    except Exception as e:
+        print(f"[Execute] Error: {e}")
 
 
 def execute_continue():
-    """Move robot to next position in plan."""
-    global knowledge, grid
+    global knowledge, grid, client
     
     if not knowledge:
         return
     
     if knowledge.get('is_stuck'):
-        print("[Execute] Robot is stuck, waiting")
+        return
+    
+    if not knowledge.get('mission_in_progress'):
         return
     
     plan = knowledge.get('current_plan')
@@ -68,121 +78,113 @@ def execute_continue():
     
     next_pos = plan[idx]
     
-    # Check if valid
+    # Validate
     if grid:
-        row, col = next_pos[0], next_pos[1]
-        if grid.get('grid', [[]])[row][col] == OBSTACLE:
-            return
+        r, c = next_pos
+        grid_data = grid.get('grid', [[]])
+        if r < len(grid_data) and c < len(grid_data[0]):
+            if grid_data[r][c] == OBSTACLE:
+                return
         if next_pos in grid.get('dynamic_obstacles', []):
             return
     
-    # Command robot to move
-    client.publish('environment/move_robot', {'position': next_pos})
+    # Command Environment
+    client.publish(TOPICS['environment_move'], json.dumps({'position': next_pos}))
     
-    # Update knowledge
-    base = knowledge.get('base_location', [1, 1])
-    client.publish('knowledge/set', {
+    # Update Knowledge
+    client.publish(TOPICS['knowledge_set'], json.dumps({
         'robot_position': next_pos,
-        'robot_is_at_base': (next_pos == base),
         'current_plan_index': idx + 1,
         'total_distance_traveled': knowledge.get('total_distance_traveled', 0) + 1
-    })
+    }))
     
-    print(f"[Execute] Moved to {next_pos}")
-    client.publish(Topics.EXECUTE_RESULT, {'status': 'moved', 'position': next_pos})
+    print(f"[Execute] Move to {next_pos}")
 
 
-def execute_start_mission(details):
-    """Start new delivery mission."""
-    global knowledge
+def execute_start(payload):
+    global knowledge, client
     
-    orders = details['orders_to_load']
-    sequence = details['delivery_sequence']
-    path = details['full_path']
+    orders = payload['orders']
+    sequence = payload['sequence']
+    path = payload['path']
     
-    # Load orders onto robot
+    # Load orders
     for order in orders:
-        client.publish('environment/load_order', {'order': order})
+        client.publish(TOPICS['environment_load'], json.dumps({'order': order}))
     
-    # Update knowledge
+    # Update Knowledge - store original_last_delivery for path coloring
     loaded_ids = {o['order_id'] for o in orders}
     pending = [o for o in knowledge.get('pending_orders', []) if o['order_id'] not in loaded_ids]
     
-    client.publish('knowledge/set', {
+    original_last = sequence[-1] if sequence else None
+    
+    client.publish(TOPICS['knowledge_set'], json.dumps({
         'pending_orders': pending,
         'loaded_orders': orders,
         'current_plan': path,
         'current_plan_index': 0,
         'delivery_sequence': sequence,
-        'original_last_delivery': sequence[-1] if sequence else None,
+        'original_last_delivery': original_last,
         'mission_in_progress': True,
-        'last_mission_start_time': time.time(),
-        'is_stuck': False
-    })
+        'is_stuck': False,
+        'last_mission_start_time': time.time()
+    }))
     
-    print(f"[Execute] Started mission with {len(orders)} orders")
-    client.publish(Topics.EXECUTE_RESULT, {'status': 'mission_started', 'orders': len(orders)})
+    print(f"[Execute] Started mission: {len(orders)} orders")
 
 
-def execute_replan(details):
-    """Apply new plan."""
-    global knowledge
+def execute_replan(payload):
+    global knowledge, client
     
-    new_path = details['new_path']
-    new_sequence = details.get('new_sequence', [])
+    path = payload['path']
+    sequence = payload.get('sequence', [])
     
     updates = {
-        'is_stuck': False,
-        'current_plan': new_path,
+        'current_plan': path,
         'current_plan_index': 0,
+        'is_stuck': False,
         'number_of_replans': knowledge.get('number_of_replans', 0) + 1
     }
+    if sequence:
+        updates['delivery_sequence'] = sequence
     
-    if new_sequence:
-        updates['delivery_sequence'] = new_sequence
-    
-    client.publish('knowledge/set', updates)
-    
-    print(f"[Execute] Replanned, path length: {len(new_path)}")
-    client.publish(Topics.EXECUTE_RESULT, {'status': 'replanned'})
+    client.publish(TOPICS['knowledge_set'], json.dumps(updates))
+    print(f"[Execute] Replanned: {len(path)} steps")
 
 
-def execute_delivery(details):
-    """Deliver order at current location."""
-    global knowledge
+def execute_deliver(payload):
+    global knowledge, client
     
-    order = details['order']
+    order = payload['order']
     order_id = order['order_id']
-    delivery_loc = order['delivery_location']
+    loc = order['delivery_location']
     
-    # Command robot to deliver
-    client.publish('environment/deliver_order', {'order_id': order_id})
+    # Command Environment
+    client.publish(TOPICS['environment_deliver'], json.dumps({'order_id': order_id}))
     
-    # Update knowledge
+    # Update Knowledge
     delivery_time = time.time() - order['timestamp']
     loaded = [o for o in knowledge.get('loaded_orders', []) if o['order_id'] != order_id]
     completed = knowledge.get('completed_orders', []) + [order]
     times = knowledge.get('delivery_times', []) + [delivery_time]
-    sequence = knowledge.get('delivery_sequence', [])
-    if delivery_loc in sequence:
-        sequence = [s for s in sequence if s != delivery_loc]
+    sequence = [s for s in knowledge.get('delivery_sequence', []) if s != loc]
     
-    client.publish('knowledge/set', {
+    client.publish(TOPICS['knowledge_set'], json.dumps({
         'loaded_orders': loaded,
         'completed_orders': completed,
         'delivery_times': times,
         'delivery_sequence': sequence
-    })
+    }))
     
     print(f"[Execute] Delivered {order_id}")
-    client.publish(Topics.EXECUTE_RESULT, {'status': 'delivered', 'order_id': order_id})
 
 
-def execute_end_mission():
-    """End current mission."""
-    client.publish('environment/clear_orders', {})
+def execute_end():
+    global client
     
-    client.publish('knowledge/set', {
+    client.publish(TOPICS['environment_clear'], json.dumps({}))
+    
+    client.publish(TOPICS['knowledge_set'], json.dumps({
         'mission_in_progress': False,
         'current_plan': None,
         'current_plan_index': 0,
@@ -190,34 +192,38 @@ def execute_end_mission():
         'original_last_delivery': None,
         'loaded_orders': [],
         'is_stuck': False
-    })
+    }))
     
     print("[Execute] Mission ended")
-    client.publish(Topics.EXECUTE_RESULT, {'status': 'mission_ended'})
 
 
-def execute_wait(details):
-    """Robot waits (stuck)."""
-    reason = details.get('reason', 'unknown')
-    
-    client.publish('knowledge/set', {'is_stuck': True})
-    
-    print(f"[Execute] Waiting: {reason}")
-    client.publish(Topics.EXECUTE_RESULT, {'status': 'waiting', 'reason': reason})
+def execute_wait(payload):
+    global client
+    client.publish(TOPICS['knowledge_set'], json.dumps({'is_stuck': True}))
+    print(f"[Execute] Waiting: {payload.get('reason')}")
+
+
+def on_connect(client_obj, userdata, flags, rc):
+    print("[Execute] Connected to MQTT")
+    client_obj.subscribe(TOPICS['knowledge_update'])
+    client_obj.subscribe(TOPICS['environment_update'])
+    client_obj.subscribe(TOPICS['plan_result'])
 
 
 if __name__ == '__main__':
-    print("[Execute] Service starting...")
+    print("[Execute] Starting...")
     
-    client = MQTTClient('execute-service')
-    client.connect()
+    client = mqtt.Client(client_id=f"execute-{uuid.uuid4().hex[:8]}")
+    client.on_connect = on_connect
+    client.on_message = handle_message
     
-    # Subscribe to state updates
-    client.subscribe(Topics.KNOWLEDGE_UPDATE, handle_knowledge_update)
-    client.subscribe(Topics.ENVIRONMENT_UPDATE, handle_environment_update)
+    while True:
+        try:
+            client.connect(BROKER, PORT, 60)
+            break
+        except:
+            print("[Execute] Waiting for MQTT...")
+            time.sleep(2)
     
-    # Subscribe to plan results
-    client.subscribe(Topics.PLAN_RESULT, handle_plan_result)
-    
-    print("[Execute] Service ready, waiting for messages...")
+    print("[Execute] Ready")
     client.loop_forever()

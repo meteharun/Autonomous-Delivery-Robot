@@ -1,136 +1,147 @@
 """
 Monitor Service - Reads sensors and publishes monitoring results.
-Listens to: MONITOR_REQUEST
-Publishes to: MONITOR_RESULT
 """
-import sys
+import paho.mqtt.client as mqtt
+import json
 import time
+import uuid
+import os
 
-sys.path.insert(0, '/app')
-from shared.mqtt_client import MQTTClient, Topics
+# Load config
+with open('/app/config.json') as f:
+    CONFIG = json.load(f)
 
-# Local state cache (updated via subscriptions)
+BROKER = os.environ.get('MQTT_BROKER', CONFIG['mqtt']['broker'])
+PORT = CONFIG['mqtt']['port']
+TOPICS = CONFIG['topics']
+
+# State cache
 knowledge = None
 environment = None
 previous_obstacles = set()
+client = None
 
 
-def handle_knowledge_update(payload):
-    """Cache knowledge state."""
-    global knowledge
-    knowledge = payload
-
-
-def handle_environment_update(payload):
-    """Cache environment state."""
-    global environment
-    environment = payload
-
-
-def handle_monitor_request(payload):
-    """Execute monitoring step and publish results."""
+def handle_message(client_obj, userdata, msg):
     global knowledge, environment, previous_obstacles
     
-    if not knowledge or not environment:
-        print("[Monitor] State not ready, skipping")
-        return
+    try:
+        topic = msg.topic
+        payload = json.loads(msg.payload.decode('utf-8')) if msg.payload else {}
+        
+        if topic == TOPICS['knowledge_update']:
+            knowledge = payload
+        
+        elif topic == TOPICS['environment_update']:
+            environment = payload
+        
+        elif topic == TOPICS['system_reset']:
+            previous_obstacles = set()
+            knowledge = None
+            environment = None
+        
+        elif topic == TOPICS['monitor_request']:
+            if not knowledge or not environment:
+                print("[Monitor] State not ready")
+                return
+            
+            grid = environment.get('grid', {})
+            robot = environment.get('robot', {})
+            
+            robot_position = robot.get('position', [1, 1])
+            loaded_orders = robot.get('loaded_orders', [])
+            is_at_base = robot.get('is_at_base', True)
+            dynamic_obstacles = grid.get('dynamic_obstacles', [])
+            
+            # Check obstacle changes
+            current_obstacles = set(tuple(o) for o in dynamic_obstacles)
+            obstacle_removed = len(previous_obstacles - current_obstacles) > 0
+            previous_obstacles = current_obstacles
+            
+            # Check path blocked
+            path_blocked = False
+            current_plan = knowledge.get('current_plan')
+            plan_index = knowledge.get('current_plan_index', 0)
+            
+            if current_plan:
+                for i in range(plan_index, len(current_plan)):
+                    pos = current_plan[i]
+                    grid_data = grid.get('grid', [])
+                    if grid_data and grid_data[pos[0]][pos[1]] == 1:
+                        path_blocked = True
+                        break
+                    if pos in dynamic_obstacles:
+                        path_blocked = True
+                        break
+            
+            # Check at delivery location
+            at_delivery_location = False
+            for order in loaded_orders:
+                if order['delivery_location'] == robot_position:
+                    at_delivery_location = True
+                    break
+            
+            # Check mission start conditions
+            needs_new_mission = False
+            mission_in_progress = knowledge.get('mission_in_progress', False)
+            pending_orders = knowledge.get('pending_orders', [])
+            max_capacity = knowledge.get('max_capacity', 3)
+            
+            if not mission_in_progress:
+                if len(pending_orders) >= max_capacity:
+                    needs_new_mission = True
+                elif pending_orders:
+                    elapsed = time.time() - knowledge.get('last_mission_start_time', time.time())
+                    if elapsed >= knowledge.get('mission_timeout', 30):
+                        needs_new_mission = True
+            
+            # Publish results
+            results = {
+                'sensor_data': {
+                    'robot_position': robot_position,
+                    'loaded_orders': loaded_orders,
+                    'is_at_base': is_at_base,
+                    'dynamic_obstacles': dynamic_obstacles,
+                    'mission_in_progress': mission_in_progress
+                },
+                'needs_new_mission': needs_new_mission,
+                'path_blocked': path_blocked,
+                'obstacle_removed': obstacle_removed,
+                'at_delivery_location': at_delivery_location,
+                'at_base': is_at_base,
+                'knowledge': knowledge,
+                'grid': grid
+            }
+            
+            client.publish(TOPICS['monitor_result'], json.dumps(results))
+            print(f"[Monitor] Published: needs_mission={needs_new_mission}, blocked={path_blocked}")
     
-    grid = environment.get('grid', {})
-    robot = environment.get('robot', {})
-    
-    # === SENSOR READINGS ===
-    robot_position = robot.get('position', [1, 1])
-    loaded_orders = robot.get('loaded_orders', [])
-    is_at_base = robot.get('is_at_base', True)
-    dynamic_obstacles = grid.get('dynamic_obstacles', [])
-    
-    # === CHECK CONDITIONS ===
-    
-    # Check if obstacle was removed
-    current_obstacles = set(tuple(o) for o in dynamic_obstacles)
-    prev_obstacles = previous_obstacles
-    obstacle_removed = len(prev_obstacles - current_obstacles) > 0
-    previous_obstacles = current_obstacles
-    
-    # Check if path is blocked
-    path_blocked = False
-    current_plan = knowledge.get('current_plan')
-    current_plan_index = knowledge.get('current_plan_index', 0)
-    
-    if current_plan:
-        for i in range(current_plan_index, len(current_plan)):
-            pos = current_plan[i]
-            grid_data = grid.get('grid', [])
-            if grid_data and grid_data[pos[0]][pos[1]] == 1:  # OBSTACLE
-                path_blocked = True
-                break
-            if pos in dynamic_obstacles:
-                path_blocked = True
-                break
-    
-    # Check if at delivery location
-    at_delivery_location = False
-    for order in loaded_orders:
-        if order['delivery_location'] == robot_position:
-            at_delivery_location = True
-            break
-    
-    # Check if should start new mission
-    needs_new_mission = False
-    mission_in_progress = knowledge.get('mission_in_progress', False)
-    pending_orders = knowledge.get('pending_orders', [])
-    max_capacity = knowledge.get('max_capacity', 3)
-    
-    if not mission_in_progress:
-        if len(pending_orders) >= max_capacity:
-            needs_new_mission = True
-        elif pending_orders:
-            time_elapsed = time.time() - knowledge.get('last_mission_start_time', time.time())
-            if time_elapsed >= knowledge.get('mission_timeout', 30):
-                needs_new_mission = True
-    
-    # === BUILD AND PUBLISH RESULTS ===
-    monitoring_results = {
-        'sensor_data': {
-            'robot_position': robot_position,
-            'loaded_orders': loaded_orders,
-            'is_at_base': is_at_base,
-            'dynamic_obstacles': dynamic_obstacles,
-            'mission_in_progress': mission_in_progress
-        },
-        'needs_new_mission': needs_new_mission,
-        'path_blocked': path_blocked,
-        'obstacle_removed': obstacle_removed,
-        'at_delivery_location': at_delivery_location,
-        'at_base': is_at_base,
-        'knowledge': knowledge,
-        'grid': grid
-    }
-    
-    client.publish(Topics.MONITOR_RESULT, monitoring_results)
-    print(f"[Monitor] Published results: needs_mission={needs_new_mission}, blocked={path_blocked}")
+    except Exception as e:
+        print(f"[Monitor] Error: {e}")
 
 
-def handle_reset(payload):
-    """Reset monitor state."""
-    global previous_obstacles
-    previous_obstacles = set()
-    print("[Monitor] Reset")
+def on_connect(client_obj, userdata, flags, rc):
+    print("[Monitor] Connected to MQTT")
+    client_obj.subscribe(TOPICS['knowledge_update'])
+    client_obj.subscribe(TOPICS['environment_update'])
+    client_obj.subscribe(TOPICS['monitor_request'])
+    client_obj.subscribe(TOPICS['system_reset'])
 
 
 if __name__ == '__main__':
-    print("[Monitor] Service starting...")
+    print("[Monitor] Starting...")
     
-    client = MQTTClient('monitor-service')
-    client.connect()
+    client = mqtt.Client(client_id=f"monitor-{uuid.uuid4().hex[:8]}")
+    client.on_connect = on_connect
+    client.on_message = handle_message
     
-    # Subscribe to state updates
-    client.subscribe(Topics.KNOWLEDGE_UPDATE, handle_knowledge_update)
-    client.subscribe(Topics.ENVIRONMENT_UPDATE, handle_environment_update)
+    while True:
+        try:
+            client.connect(BROKER, PORT, 60)
+            break
+        except:
+            print("[Monitor] Waiting for MQTT...")
+            time.sleep(2)
     
-    # Subscribe to commands
-    client.subscribe(Topics.MONITOR_REQUEST, handle_monitor_request)
-    client.subscribe(Topics.SYSTEM_RESET, handle_reset)
-    
-    print("[Monitor] Service ready, waiting for messages...")
+    print("[Monitor] Ready")
     client.loop_forever()

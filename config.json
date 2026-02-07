@@ -1,0 +1,32 @@
+{
+  "mqtt": {
+    "broker": "mqtt",
+    "port": 1883
+  },
+  "topics": {
+    "system_init": "system/init",
+    "system_reset": "system/reset",
+    "user_add_order": "user/add_order",
+    "user_toggle_obstacle": "user/toggle_obstacle",
+    "monitor_request": "mape/monitor/request",
+    "monitor_result": "mape/monitor/result",
+    "analyze_result": "mape/analyze/result",
+    "plan_result": "mape/plan/result",
+    "knowledge_update": "knowledge/update",
+    "knowledge_set": "knowledge/set",
+    "environment_update": "environment/update",
+    "environment_move": "environment/move_robot",
+    "environment_load": "environment/load_order",
+    "environment_deliver": "environment/deliver_order",
+    "environment_clear": "environment/clear_orders"
+  },
+  "robot": {
+    "max_capacity": 3,
+    "mission_timeout": 30,
+    "base_location": [1, 1]
+  },
+  "grid": {
+    "width": 22,
+    "height": 15
+  }
+}

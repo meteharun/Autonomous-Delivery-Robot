@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # MQTT Broker
   mqtt:
     image: eclipse-mosquitto:2
     ports:
@@ -14,7 +13,6 @@ services:
       timeout: 3s
       retries: 5
 
-  # Knowledge Service
   knowledge:
     build:
       context: .
@@ -26,7 +24,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Environment Service
   environment:
     build:
       context: .
@@ -38,7 +35,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Monitor Service
   monitor:
     build:
       context: .
@@ -50,7 +46,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Analyze Service
   analyze:
     build:
       context: .
@@ -62,7 +57,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Plan Service
   plan:
     build:
       context: .
@@ -74,7 +68,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Execute Service
   execute:
     build:
       context: .
@@ -86,7 +79,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Web Service
   web:
     build:
       context: .

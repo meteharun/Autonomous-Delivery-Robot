@@ -1,90 +1,119 @@
 """
-Analyze Service - Analyzes monitoring results and decides adaptation.
-Listens to: MONITOR_RESULT
-Publishes to: ANALYZE_RESULT
+Analyze Service - Analyzes monitoring data and decides adaptation.
 """
-import sys
+import paho.mqtt.client as mqtt
+import json
+import time
+import uuid
+import os
 
-sys.path.insert(0, '/app')
-from shared.mqtt_client import MQTTClient, Topics
+# Load config
+with open('/app/config.json') as f:
+    CONFIG = json.load(f)
+
+BROKER = os.environ.get('MQTT_BROKER', CONFIG['mqtt']['broker'])
+PORT = CONFIG['mqtt']['port']
+TOPICS = CONFIG['topics']
+
+client = None
 
 
-def handle_monitor_result(payload):
-    """Analyze monitoring results and publish analysis."""
-    knowledge = payload.get('knowledge', {})
+def handle_message(client_obj, userdata, msg):
+    global client
     
-    analysis = {
-        'requires_adaptation': False,
-        'adaptation_type': None,
-        'reason': None,
-        'monitoring_data': payload
-    }
+    try:
+        topic = msg.topic
+        payload = json.loads(msg.payload.decode('utf-8')) if msg.payload else {}
+        
+        if topic == TOPICS['monitor_result']:
+            sensor_data = payload.get('sensor_data', {})
+            knowledge = payload.get('knowledge', {})
+            grid = payload.get('grid', {})
+            
+            analysis = {
+                'requires_adaptation': False,
+                'adaptation_type': None,
+                'reason': None,
+                'knowledge': knowledge,
+                'grid': grid
+            }
+            
+            mission_in_progress = sensor_data.get('mission_in_progress', False)
+            loaded_orders = sensor_data.get('loaded_orders', [])
+            is_at_base = payload.get('at_base', False)
+            
+            # Rule 1: Mission complete
+            if mission_in_progress and not loaded_orders and is_at_base:
+                analysis['requires_adaptation'] = True
+                analysis['adaptation_type'] = 'end_mission'
+                analysis['reason'] = 'Back at base'
+                client.publish(TOPICS['analyze_result'], json.dumps(analysis))
+                print("[Analyze] Decision: end_mission")
+                return
+            
+            # Rule 2: At delivery location
+            if payload.get('at_delivery_location') and loaded_orders:
+                analysis['requires_adaptation'] = True
+                analysis['adaptation_type'] = 'deliver'
+                analysis['reason'] = 'At delivery location'
+                client.publish(TOPICS['analyze_result'], json.dumps(analysis))
+                print("[Analyze] Decision: deliver")
+                return
+            
+            # Rule 3: Start mission
+            if payload.get('needs_new_mission') and not mission_in_progress:
+                analysis['requires_adaptation'] = True
+                analysis['adaptation_type'] = 'start_mission'
+                analysis['reason'] = 'Capacity or timeout'
+                client.publish(TOPICS['analyze_result'], json.dumps(analysis))
+                print("[Analyze] Decision: start_mission")
+                return
+            
+            # Rule 4: Path blocked
+            if payload.get('path_blocked') and mission_in_progress:
+                analysis['requires_adaptation'] = True
+                analysis['adaptation_type'] = 'replan'
+                analysis['reason'] = 'Path blocked'
+                client.publish(TOPICS['analyze_result'], json.dumps(analysis))
+                print("[Analyze] Decision: replan (blocked)")
+                return
+            
+            # Rule 5: Obstacle removed
+            if payload.get('obstacle_removed') and mission_in_progress:
+                analysis['requires_adaptation'] = True
+                analysis['adaptation_type'] = 'replan'
+                analysis['reason'] = 'Obstacle removed'
+                client.publish(TOPICS['analyze_result'], json.dumps(analysis))
+                print("[Analyze] Decision: replan (obstacle removed)")
+                return
+            
+            # No adaptation needed
+            client.publish(TOPICS['analyze_result'], json.dumps(analysis))
+            print("[Analyze] Decision: continue")
     
-    # === RULE-BASED ANALYSIS ===
-    
-    # Rule 1: Check if new mission should start
-    if payload.get('needs_new_mission') and not knowledge.get('mission_in_progress'):
-        analysis['requires_adaptation'] = True
-        analysis['adaptation_type'] = 'start_mission'
-        analysis['reason'] = 'Capacity full or timeout reached'
-        client.publish(Topics.ANALYZE_RESULT, analysis)
-        print(f"[Analyze] Decision: start_mission")
-        return
-    
-    # Rule 2: Check if path is blocked
-    if payload.get('path_blocked'):
-        analysis['requires_adaptation'] = True
-        analysis['adaptation_type'] = 'replan_path'
-        analysis['reason'] = 'Current path blocked by dynamic obstacle'
-        client.publish(Topics.ANALYZE_RESULT, analysis)
-        print(f"[Analyze] Decision: replan_path (blocked)")
-        return
-    
-    # Rule 3: Check if obstacle was removed
-    if payload.get('obstacle_removed') and knowledge.get('mission_in_progress'):
-        analysis['requires_adaptation'] = True
-        analysis['adaptation_type'] = 'replan_path'
-        if knowledge.get('is_stuck'):
-            analysis['reason'] = 'Obstacle removed - attempting to resume'
-        else:
-            analysis['reason'] = 'Obstacle removed - recalculating optimal path'
-        client.publish(Topics.ANALYZE_RESULT, analysis)
-        print(f"[Analyze] Decision: replan_path (obstacle removed)")
-        return
-    
-    # Rule 4: Check if at delivery location
-    if payload.get('at_delivery_location') and knowledge.get('loaded_orders'):
-        analysis['requires_adaptation'] = True
-        analysis['adaptation_type'] = 'deliver_order'
-        analysis['reason'] = 'Reached delivery location'
-        client.publish(Topics.ANALYZE_RESULT, analysis)
-        print(f"[Analyze] Decision: deliver_order")
-        return
-    
-    # Rule 5: Check if mission complete
-    if (knowledge.get('mission_in_progress') and 
-        payload.get('at_base') and 
-        len(knowledge.get('loaded_orders', [])) == 0):
-        analysis['requires_adaptation'] = True
-        analysis['adaptation_type'] = 'end_mission'
-        analysis['reason'] = 'All deliveries completed, returned to base'
-        client.publish(Topics.ANALYZE_RESULT, analysis)
-        print(f"[Analyze] Decision: end_mission")
-        return
-    
-    # No adaptation needed - continue
-    client.publish(Topics.ANALYZE_RESULT, analysis)
-    print(f"[Analyze] Decision: continue")
+    except Exception as e:
+        print(f"[Analyze] Error: {e}")
+
+
+def on_connect(client_obj, userdata, flags, rc):
+    print("[Analyze] Connected to MQTT")
+    client_obj.subscribe(TOPICS['monitor_result'])
 
 
 if __name__ == '__main__':
-    print("[Analyze] Service starting...")
+    print("[Analyze] Starting...")
     
-    client = MQTTClient('analyze-service')
-    client.connect()
+    client = mqtt.Client(client_id=f"analyze-{uuid.uuid4().hex[:8]}")
+    client.on_connect = on_connect
+    client.on_message = handle_message
     
-    # Subscribe to monitor results
-    client.subscribe(Topics.MONITOR_RESULT, handle_monitor_result)
+    while True:
+        try:
+            client.connect(BROKER, PORT, 60)
+            break
+        except:
+            print("[Analyze] Waiting for MQTT...")
+            time.sleep(2)
     
-    print("[Analyze] Service ready, waiting for messages...")
+    print("[Analyze] Ready")
     client.loop_forever()

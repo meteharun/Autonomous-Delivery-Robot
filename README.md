@@ -17,9 +17,10 @@ A self-adaptive autonomous delivery robot simulation implementing the **MAPE-K (
 - [Project Structure](#-project-structure)
 - [Installation](#-installation)
 - [Usage](#-usage)
+- [Configuration](#-configuration)
 - [MAPE-K Components](#-mape-k-components)
 - [MQTT Topics](#-mqtt-topics)
-- [Metrics & Config](#-metrics)
+- [Metrics](#-metrics)
 - [Contributors](#-developed-by)
 
 ## 🎯 Overview
@@ -33,7 +34,7 @@ The system demonstrates key concepts of **self-adaptive systems**:
 - Execution of movement and delivery actions
 - Knowledge base maintaining system state
 
-**Key architectural feature**: Each MAPE-K component runs as an independent Docker container, communicating exclusively via MQTT publish/subscribe messaging. This enables **runtime replacement** of any component without affecting others.
+**Key architectural feature**: Each MAPE-K component runs as an independent Docker container with **no shared code**. Services communicate via MQTT and read configuration from a shared `config.json` file. This enables **true runtime replacement** of any component without affecting others.
 
 ## ✨ Features
 
@@ -51,7 +52,7 @@ The system demonstrates key concepts of **self-adaptive systems**:
   - Auto-start after 3 orders OR 30-second timeout
   - Capacity-based loading (max 3 orders)
 - **Metrics Tracking**: Distance traveled, deliveries completed, replans count, average delivery time
-- **Microservices Architecture**: Each MAPE-K component is independently deployable and replaceable at runtime
+- **True Microservices**: Each service is fully standalone with no shared code dependencies
 
 
 ### MAPE-K Message Flow
@@ -77,6 +78,9 @@ Web triggers ──► mape/monitor/request
 
 ```
 autonomous-delivery-robot/
+├── config.json                  # Shared configuration (topics, settings)
+├── docker-compose.yml
+├── mosquitto.conf
 ├── assets/                      # Icon images
 │   ├── robot.png
 │   ├── supermarket.png
@@ -84,38 +88,33 @@ autonomous-delivery-robot/
 │   ├── pending.png
 │   ├── tree.png
 │   └── roadblock.png
-├── services/
-│   ├── shared/                  # Shared utilities
-│   │   ├── __init__.py
-│   │   ├── mqtt_client.py      # MQTT client wrapper
-│   │   └── state_models.py     # State data structures
-│   ├── knowledge/               # Knowledge service
-│   │   ├── Dockerfile
-│   │   └── service.py
-│   ├── environment/             # Environment service (Grid + Robot)
-│   │   ├── Dockerfile
-│   │   └── service.py
-│   ├── monitor/                 # Monitor service
-│   │   ├── Dockerfile
-│   │   └── service.py
-│   ├── analyze/                 # Analyze service
-│   │   ├── Dockerfile
-│   │   └── service.py
-│   ├── plan/                    # Plan service (A* pathfinding)
-│   │   ├── Dockerfile
-│   │   └── service.py
-│   ├── execute/                 # Execute service
-│   │   ├── Dockerfile
-│   │   └── service.py
-│   └── web/                     # Web service (UI + orchestration)
-│       ├── Dockerfile
-│       ├── service.py
-│       └── templates/
-│           └── index.html
-├── docker-compose.yml
-├── mosquitto.conf               # MQTT broker configuration
-└── README.md
+└── services/
+    ├── knowledge/               # Knowledge service (standalone)
+    │   ├── Dockerfile
+    │   └── service.py
+    ├── environment/             # Environment service (standalone)
+    │   ├── Dockerfile
+    │   └── service.py
+    ├── monitor/                 # Monitor service (standalone)
+    │   ├── Dockerfile
+    │   └── service.py
+    ├── analyze/                 # Analyze service (standalone)
+    │   ├── Dockerfile
+    │   └── service.py
+    ├── plan/                    # Plan service (standalone)
+    │   ├── Dockerfile
+    │   └── service.py
+    ├── execute/                 # Execute service (standalone)
+    │   ├── Dockerfile
+    │   └── service.py
+    └── web/                     # Web service (standalone)
+        ├── Dockerfile
+        ├── service.py
+        └── templates/
+            └── index.html
 ```
+
+**Note**: There is no `shared/` folder. Each service is completely standalone and reads configuration from `config.json`.
 
 ## 🚀 Installation
 
@@ -148,7 +147,7 @@ autonomous-delivery-robot/
 
 ### Runtime Component Replacement
 
-One of the key features of this architecture is **runtime replaceability**. To replace a component:
+Each service is fully standalone with no shared code. To replace a component:
 
 ```bash
 # Stop only the plan service
@@ -199,40 +198,78 @@ The other services continue running and will automatically use the updated Plan 
 | 🔴 Red line | Return path (Last house → Base) |
 | ⚠️ STUCK | Robot has no valid path |
 
+## ⚙️ Configuration
+
+All services read from `config.json`:
+
+```json
+{
+  "mqtt": {
+    "broker": "mqtt",
+    "port": 1883
+  },
+  "topics": {
+    "system_init": "system/init",
+    "system_reset": "system/reset",
+    "monitor_request": "mape/monitor/request",
+    "monitor_result": "mape/monitor/result",
+    "analyze_result": "mape/analyze/result",
+    "plan_result": "mape/plan/result",
+    "knowledge_update": "knowledge/update",
+    "knowledge_set": "knowledge/set",
+    "environment_update": "environment/update",
+    ...
+  },
+  "robot": {
+    "max_capacity": 3,
+    "mission_timeout": 30,
+    "base_location": [1, 1]
+  },
+  "grid": {
+    "width": 22,
+    "height": 15
+  }
+}
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `mqtt.broker` | MQTT broker hostname |
+| `mqtt.port` | MQTT broker port |
+| `topics.*` | MQTT topic names for all communication |
+| `robot.max_capacity` | Maximum orders per mission |
+| `robot.mission_timeout` | Seconds before auto-start |
+| `robot.base_location` | Starting position |
+| `grid.width/height` | Grid dimensions |
+
 ## 🔧 MAPE-K Components
 
-Each component runs as an independent Docker container:
-
-### Monitor (`services/monitor/service.py`)
-- Subscribes to: `knowledge/update`, `environment/update`, `mape/monitor/request`
-- Publishes to: `mape/monitor/result`
-- Collects sensor data: robot position, obstacles, orders
-- Detects path blockages and environmental changes
-
-### Analyze (`services/analyze/service.py`)
-- Subscribes to: `mape/monitor/result`
-- Publishes to: `mape/analyze/result`
-- Evaluates if adaptation is needed
-- Detects mission triggers (capacity/timeout)
-- Determines replanning requirements
-
-### Plan (`services/plan/service.py`)
-- Subscribes to: `mape/analyze/result`
-- Publishes to: `mape/plan/result`
-- Creates optimal delivery sequences using A* algorithm
-- Handles replanning when blocked
-
-### Execute (`services/execute/service.py`)
-- Subscribes to: `mape/plan/result`, `knowledge/update`, `environment/update`
-- Publishes to: `knowledge/set`, `environment/*` commands
-- Issues movement commands
-- Handles order loading/delivery
+Each component runs as an independent Docker container with no shared code:
 
 ### Knowledge (`services/knowledge/service.py`)
 - Subscribes to: `system/init`, `system/reset`, `user/add_order`, `knowledge/set`
 - Publishes to: `knowledge/update`
 - Stores system state: orders, plan, metrics
-- Pure data storage with no logic
+
+### Monitor (`services/monitor/service.py`)
+- Subscribes to: `knowledge/update`, `environment/update`, `mape/monitor/request`
+- Publishes to: `mape/monitor/result`
+- Collects sensor data, detects path blockages
+
+### Analyze (`services/analyze/service.py`)
+- Subscribes to: `mape/monitor/result`
+- Publishes to: `mape/analyze/result`
+- Evaluates adaptation needs, applies rules
+
+### Plan (`services/plan/service.py`)
+- Subscribes to: `mape/analyze/result`
+- Publishes to: `mape/plan/result`
+- A* pathfinding, optimal delivery sequences
+
+### Execute (`services/execute/service.py`)
+- Subscribes to: `mape/plan/result`, `knowledge/update`, `environment/update`
+- Publishes to: `knowledge/set`, `environment/*` commands
+- Commands robot, updates state
 
 ### Environment (`services/environment/service.py`)
 - Subscribes to: `system/init`, `system/reset`, `user/toggle_obstacle`, `environment/*`
@@ -265,17 +302,6 @@ The system tracks:
 - **Total Distance**: Cells traveled by the robot
 - **Replans**: Number of path recalculations
 - **Average Delivery Time**: Mean time per delivery
-
-## 🛠️ Configuration
-
-Key parameters in the code:
-
-| Parameter | Location | Default | Description |
-|-----------|----------|---------|-------------|
-| Grid size | `state_models.py` | 22x15 | Map dimensions |
-| Max capacity | `state_models.py` | 3 | Orders per mission |
-| Mission timeout | `state_models.py` | 30s | Auto-start timer |
-| Robot speed | `web/service.py` | 0.4s | MAPE-K loop interval |
 
 ## 👥 Developed by
 

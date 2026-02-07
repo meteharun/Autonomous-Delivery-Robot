@@ -1,19 +1,27 @@
 """
-Plan Service - Creates adaptation plans with A* pathfinding.
-Listens to: ANALYZE_RESULT
-Publishes to: PLAN_RESULT
+Plan Service - Creates plans using A* pathfinding.
 """
-import sys
+import paho.mqtt.client as mqtt
+import json
+import time
+import uuid
+import os
 import heapq
 from itertools import permutations
 
-sys.path.insert(0, '/app')
-from shared.mqtt_client import MQTTClient, Topics
+# Load config
+with open('/app/config.json') as f:
+    CONFIG = json.load(f)
+
+BROKER = os.environ.get('MQTT_BROKER', CONFIG['mqtt']['broker'])
+PORT = CONFIG['mqtt']['port']
+TOPICS = CONFIG['topics']
 
 OBSTACLE = 1
+client = None
 
 
-# ==================== A* PATHFINDING ====================
+# ========== A* PATHFINDING ==========
 
 def heuristic(a, b):
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
@@ -24,19 +32,12 @@ def get_neighbors(grid, pos):
     height = len(grid['grid'])
     width = len(grid['grid'][0])
     
-    candidates = [(row - 1, col), (row + 1, col), (row, col - 1), (row, col + 1)]
-    valid = []
-    
-    for r, c in candidates:
-        if not (0 <= r < height and 0 <= c < width):
-            continue
-        if grid['grid'][r][c] == OBSTACLE:
-            continue
-        if [r, c] in grid['dynamic_obstacles']:
-            continue
-        valid.append((r, c))
-    
-    return valid
+    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+        r, c = row + dr, col + dc
+        if 0 <= r < height and 0 <= c < width:
+            if grid['grid'][r][c] != OBSTACLE:
+                if [r, c] not in grid.get('dynamic_obstacles', []):
+                    yield (r, c)
 
 
 def find_path(grid, start, goal):
@@ -48,7 +49,7 @@ def find_path(grid, start, goal):
     
     if grid['grid'][goal[0]][goal[1]] == OBSTACLE:
         return None
-    if list(goal) in grid['dynamic_obstacles']:
+    if list(goal) in grid.get('dynamic_obstacles', []):
         return None
     
     counter = 0
@@ -57,7 +58,6 @@ def find_path(grid, start, goal):
     
     while frontier:
         _, _, current, path = heapq.heappop(frontier)
-        
         if current in visited:
             continue
         visited.add(current)
@@ -68,242 +68,220 @@ def find_path(grid, start, goal):
         for neighbor in get_neighbors(grid, current):
             if neighbor not in visited:
                 new_path = path + [neighbor]
-                g_score = len(new_path) - 1
-                h_score = heuristic(neighbor, goal)
                 counter += 1
-                heapq.heappush(frontier, (g_score + h_score, counter, neighbor, new_path))
+                f = len(new_path) - 1 + heuristic(neighbor, goal)
+                heapq.heappush(frontier, (f, counter, neighbor, new_path))
     
     return None
 
 
-def calculate_distance(grid, pos1, pos2):
-    path = find_path(grid, pos1, pos2)
+def calc_distance(grid, p1, p2):
+    path = find_path(grid, p1, p2)
     return len(path) - 1 if path else float('inf')
 
 
-# ==================== DELIVERY PLANNING ====================
-
-def plan_delivery_sequence(grid, start_pos, delivery_locations, return_to_base):
-    if not delivery_locations:
+def plan_sequence(grid, start, deliveries, base):
+    if not deliveries:
         return []
-    if len(delivery_locations) == 1:
-        return [delivery_locations[0]]
-    if len(delivery_locations) <= 5:
-        return find_optimal_sequence(grid, start_pos, delivery_locations, return_to_base)
-    return nearest_neighbor_sequence(grid, start_pos, delivery_locations)
+    if len(deliveries) == 1:
+        return [deliveries[0]]
+    
+    if len(deliveries) <= 5:
+        return optimal_sequence(grid, start, deliveries, base)
+    return nearest_neighbor(grid, start, deliveries)
 
 
-def find_optimal_sequence(grid, start_pos, delivery_locations, return_to_base):
-    start_pos = tuple(start_pos)
-    return_to_base = tuple(return_to_base)
-    delivery_tuples = [tuple(loc) for loc in delivery_locations]
+def optimal_sequence(grid, start, deliveries, base):
+    start = tuple(start)
+    base = tuple(base)
+    locs = [tuple(d) for d in deliveries]
     
-    all_points = [start_pos] + delivery_tuples + [return_to_base]
-    distance_cache = {}
+    best_seq, best_dist = None, float('inf')
     
-    for p1 in all_points:
-        for p2 in all_points:
-            if p1 != p2 and (p1, p2) not in distance_cache:
-                dist = calculate_distance(grid, p1, p2)
-                distance_cache[(p1, p2)] = dist
-                distance_cache[(p2, p1)] = dist
-    
-    best_sequence = None
-    best_total = float('inf')
-    best_sum = float('inf')
-    
-    for perm in permutations(delivery_tuples):
-        total = 0
-        sum_times = 0
-        cumulative = 0
-        current = start_pos
+    for perm in permutations(locs):
+        dist, current = 0, start
         valid = True
-        
-        for delivery in perm:
-            dist = distance_cache.get((current, delivery), float('inf'))
-            if dist == float('inf'):
+        for loc in perm:
+            d = calc_distance(grid, current, loc)
+            if d == float('inf'):
                 valid = False
                 break
-            cumulative += dist
-            sum_times += cumulative
-            total += dist
-            current = delivery
-        
+            dist += d
+            current = loc
         if valid:
-            return_dist = distance_cache.get((current, return_to_base), float('inf'))
-            if return_dist != float('inf'):
-                total += return_dist
-            else:
-                valid = False
-        
-        if valid and (total < best_total or (total == best_total and sum_times < best_sum)):
-            best_total = total
-            best_sum = sum_times
-            best_sequence = list(perm)
+            d = calc_distance(grid, current, base)
+            if d != float('inf'):
+                dist += d
+                if dist < best_dist:
+                    best_dist, best_seq = dist, list(perm)
     
-    if best_sequence:
-        return [list(p) for p in best_sequence]
-    return nearest_neighbor_sequence(grid, start_pos, delivery_locations)
+    if best_seq:
+        return [list(p) for p in best_seq]
+    return nearest_neighbor(grid, start, deliveries)
 
 
-def nearest_neighbor_sequence(grid, start_pos, delivery_locations):
-    sequence = []
-    remaining = [list(loc) for loc in delivery_locations]
-    current = list(start_pos)
+def nearest_neighbor(grid, start, deliveries):
+    seq = []
+    remaining = [list(d) for d in deliveries]
+    current = list(start)
     
     while remaining:
-        nearest = None
-        min_dist = float('inf')
-        
+        nearest, min_d = None, float('inf')
         for loc in remaining:
-            dist = calculate_distance(grid, current, loc)
-            if dist < min_dist:
-                min_dist = dist
-                nearest = loc
-        
-        if nearest is None:
+            d = calc_distance(grid, current, loc)
+            if d < min_d:
+                min_d, nearest = d, loc
+        if not nearest:
             break
-        
-        sequence.append(nearest)
+        seq.append(nearest)
         remaining.remove(nearest)
         current = nearest
     
-    return sequence
+    return seq
 
 
-def create_full_path(grid, start_pos, delivery_sequence, return_to_base):
-    full_path = []
-    current = start_pos
+def create_full_path(grid, start, sequence, base):
+    path = []
+    current = start
     
-    for delivery in delivery_sequence:
-        segment = find_path(grid, current, delivery)
-        if segment is None:
+    for loc in sequence:
+        segment = find_path(grid, current, loc)
+        if not segment:
             return None
-        if full_path:
-            full_path.extend(segment[1:])
-        else:
-            full_path.extend(segment)
-        current = delivery
+        path.extend(segment[1:] if path else segment)
+        current = loc
     
-    return_segment = find_path(grid, current, return_to_base)
-    if return_segment is None:
+    segment = find_path(grid, current, base)
+    if not segment:
         return None
+    path.extend(segment[1:] if path else segment)
     
-    if full_path:
-        full_path.extend(return_segment[1:])
-    else:
-        full_path.extend(return_segment)
+    return path
+
+
+def handle_message(client_obj, userdata, msg):
+    global client
     
-    return full_path
-
-
-# ==================== PLAN HANDLERS ====================
-
-def handle_analyze_result(payload):
-    """Create plan based on analysis."""
-    if not payload.get('requires_adaptation'):
-        client.publish(Topics.PLAN_RESULT, {'action': 'continue', 'details': None})
-        print("[Plan] No adaptation needed, continue")
-        return
+    try:
+        topic = msg.topic
+        payload = json.loads(msg.payload.decode('utf-8')) if msg.payload else {}
+        
+        if topic == TOPICS['analyze_result']:
+            if not payload.get('requires_adaptation'):
+                client.publish(TOPICS['plan_result'], json.dumps({'action': 'continue'}))
+                print("[Plan] No adaptation needed")
+                return
+            
+            action = payload.get('adaptation_type')
+            knowledge = payload.get('knowledge', {})
+            grid = payload.get('grid', {})
+            
+            if action == 'start_mission':
+                plan_start_mission(knowledge, grid)
+            elif action == 'replan':
+                plan_replan(knowledge, grid)
+            elif action == 'deliver':
+                plan_deliver(knowledge)
+            elif action == 'end_mission':
+                client.publish(TOPICS['plan_result'], json.dumps({'action': 'end_mission'}))
+                print("[Plan] End mission")
+            else:
+                client.publish(TOPICS['plan_result'], json.dumps({'action': 'continue'}))
     
-    adaptation_type = payload.get('adaptation_type')
-    monitoring_data = payload.get('monitoring_data', {})
-    knowledge = monitoring_data.get('knowledge', {})
-    grid = monitoring_data.get('grid', {})
+    except Exception as e:
+        print(f"[Plan] Error: {e}")
+
+
+def plan_start_mission(knowledge, grid):
+    global client
     
-    if adaptation_type == 'start_mission':
-        plan_new_mission(knowledge, grid)
-    elif adaptation_type == 'replan_path':
-        plan_replan(knowledge, grid)
-    elif adaptation_type == 'deliver_order':
-        plan_delivery(knowledge)
-    elif adaptation_type == 'end_mission':
-        client.publish(Topics.PLAN_RESULT, {'action': 'end_mission', 'details': None})
-        print("[Plan] End mission")
-    else:
-        client.publish(Topics.PLAN_RESULT, {'action': 'continue', 'details': None})
-
-
-def plan_new_mission(knowledge, grid):
     orders = knowledge.get('pending_orders', [])[:knowledge.get('max_capacity', 3)]
-    
-    if not orders:
-        client.publish(Topics.PLAN_RESULT, {'action': 'continue', 'details': None})
+    if not orders or not grid:
+        client.publish(TOPICS['plan_result'], json.dumps({'action': 'continue'}))
         return
     
-    delivery_locations = [o['delivery_location'] for o in orders]
     base = knowledge.get('base_location', [1, 1])
+    deliveries = [o['delivery_location'] for o in orders]
     
-    sequence = plan_delivery_sequence(grid, base, delivery_locations, base)
-    full_path = create_full_path(grid, base, sequence, base)
+    sequence = plan_sequence(grid, base, deliveries, base)
+    path = create_full_path(grid, base, sequence, base)
     
-    if full_path is None:
-        client.publish(Topics.PLAN_RESULT, {'action': 'continue', 'details': None})
+    if not path:
+        client.publish(TOPICS['plan_result'], json.dumps({'action': 'continue'}))
         return
     
-    client.publish(Topics.PLAN_RESULT, {
+    client.publish(TOPICS['plan_result'], json.dumps({
         'action': 'start_mission',
-        'details': {
-            'orders_to_load': orders,
-            'delivery_sequence': sequence,
-            'full_path': full_path
-        }
-    })
-    print(f"[Plan] New mission with {len(orders)} orders")
+        'orders': orders,
+        'sequence': sequence,
+        'path': path
+    }))
+    print(f"[Plan] Start mission: {len(orders)} orders, path: {len(path)} steps")
 
 
 def plan_replan(knowledge, grid):
-    robot_pos = knowledge.get('robot_position', [1, 1])
+    global client
+    
+    pos = knowledge.get('robot_position', [1, 1])
     base = knowledge.get('base_location', [1, 1])
-    remaining = [o['delivery_location'] for o in knowledge.get('loaded_orders', [])]
+    loaded = knowledge.get('loaded_orders', [])
     
-    if not remaining:
-        new_path = find_path(grid, robot_pos, base)
-        new_sequence = []
+    if not loaded:
+        path = find_path(grid, pos, base)
+        sequence = []
     else:
-        new_sequence = plan_delivery_sequence(grid, robot_pos, remaining, base)
-        new_path = create_full_path(grid, robot_pos, new_sequence, base)
+        deliveries = [o['delivery_location'] for o in loaded]
+        sequence = plan_sequence(grid, pos, deliveries, base)
+        path = create_full_path(grid, pos, sequence, base)
     
-    if new_path is None:
-        client.publish(Topics.PLAN_RESULT, {
-            'action': 'wait',
-            'details': {'reason': 'no_valid_path'}
-        })
-        print("[Plan] No valid path, wait")
+    if not path:
+        client.publish(TOPICS['plan_result'], json.dumps({'action': 'wait', 'reason': 'no_path'}))
+        print("[Plan] No path - wait")
         return
     
-    client.publish(Topics.PLAN_RESULT, {
+    client.publish(TOPICS['plan_result'], json.dumps({
         'action': 'replan',
-        'details': {
-            'new_path': new_path,
-            'new_sequence': new_sequence
-        }
-    })
-    print(f"[Plan] Replanned, path length: {len(new_path)}")
+        'path': path,
+        'sequence': sequence
+    }))
+    print(f"[Plan] Replanned: {len(path)} steps")
 
 
-def plan_delivery(knowledge):
-    robot_pos = knowledge.get('robot_position')
+def plan_deliver(knowledge):
+    global client
     
+    pos = knowledge.get('robot_position')
     for order in knowledge.get('loaded_orders', []):
-        if order['delivery_location'] == robot_pos:
-            client.publish(Topics.PLAN_RESULT, {
+        if order['delivery_location'] == pos:
+            client.publish(TOPICS['plan_result'], json.dumps({
                 'action': 'deliver',
-                'details': {'order': order}
-            })
-            print(f"[Plan] Deliver order {order['order_id']}")
+                'order': order
+            }))
+            print(f"[Plan] Deliver {order['order_id']}")
             return
     
-    client.publish(Topics.PLAN_RESULT, {'action': 'continue', 'details': None})
+    client.publish(TOPICS['plan_result'], json.dumps({'action': 'continue'}))
+
+
+def on_connect(client_obj, userdata, flags, rc):
+    print("[Plan] Connected to MQTT")
+    client_obj.subscribe(TOPICS['analyze_result'])
 
 
 if __name__ == '__main__':
-    print("[Plan] Service starting...")
+    print("[Plan] Starting...")
     
-    client = MQTTClient('plan-service')
-    client.connect()
+    client = mqtt.Client(client_id=f"plan-{uuid.uuid4().hex[:8]}")
+    client.on_connect = on_connect
+    client.on_message = handle_message
     
-    client.subscribe(Topics.ANALYZE_RESULT, handle_analyze_result)
+    while True:
+        try:
+            client.connect(BROKER, PORT, 60)
+            break
+        except:
+            print("[Plan] Waiting for MQTT...")
+            time.sleep(2)
     
-    print("[Plan] Service ready, waiting for messages...")
+    print("[Plan] Ready")
     client.loop_forever()
