@@ -89,25 +89,25 @@ autonomous-delivery-robot/
 │   ├── tree.png
 │   └── roadblock.png
 └── services/
-    ├── knowledge/               # Knowledge service (standalone)
+    ├── knowledge/              
     │   ├── Dockerfile
     │   └── service.py
-    ├── environment/             # Environment service (standalone)
+    ├── environment/           
     │   ├── Dockerfile
     │   └── service.py
-    ├── monitor/                 # Monitor service (standalone)
+    ├── monitor/                 
     │   ├── Dockerfile
     │   └── service.py
-    ├── analyze/                 # Analyze service (standalone)
+    ├── analyze/                 
     │   ├── Dockerfile
     │   └── service.py
-    ├── plan/                    # Plan service (standalone)
+    ├── plan/                    
     │   ├── Dockerfile
     │   └── service.py
-    ├── execute/                 # Execute service (standalone)
+    ├── execute/                 
     │   ├── Dockerfile
     │   └── service.py
-    └── web/                     # Web service (standalone)
+    └── web/                    
         ├── Dockerfile
         ├── service.py
         └── templates/
