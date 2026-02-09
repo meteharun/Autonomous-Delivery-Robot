@@ -149,6 +149,7 @@ def mape_loop():
     while True:
         if running and mqtt_client:
             mqtt_client.publish(TOPICS['monitor_request'], json.dumps({}))
+            broadcast_state()
         eventlet.sleep(0.4)
 
 

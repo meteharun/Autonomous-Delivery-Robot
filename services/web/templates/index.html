@@ -413,6 +413,8 @@
         let gridHeight = 15;
         const CELL_SIZE = 47;
         const GAP = 1;
+        let gridInitialized = false;
+        let gridCells = []; // Store cell references
         
         // Cell type constants
         const EMPTY = 0;
@@ -654,25 +656,58 @@
             ctx.stroke();
         }
         
-        function updateGrid(state) {
+        function initializeGrid(state) {
             const gridEl = document.getElementById('grid');
             gridEl.innerHTML = '';
             gridEl.style.gridTemplateColumns = `repeat(${state.width}, 47px)`;
             
             gridWidth = state.width;
             gridHeight = state.height;
+            gridCells = [];
+            
+            for (let row = 0; row < state.height; row++) {
+                gridCells[row] = [];
+                for (let col = 0; col < state.width; col++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.row = row;
+                    cell.dataset.col = col;
+                    
+                    // Add click handler
+                    cell.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleCellClick(parseInt(this.dataset.row), parseInt(this.dataset.col));
+                    });
+                    
+                    gridEl.appendChild(cell);
+                    gridCells[row][col] = cell;
+                }
+            }
+            
+            gridInitialized = true;
+        }
+        
+        function updateGrid(state) {
+            // Initialize grid only once
+            if (!gridInitialized) {
+                initializeGrid(state);
+            }
             
             const deliverySet = new Set(state.delivery_locations.map(loc => `${loc[0]},${loc[1]}`));
             const pendingSet = new Set(state.pending_locations.map(loc => `${loc[0]},${loc[1]}`));
             const dynamicSet = new Set(state.dynamic_obstacles.map(loc => `${loc[0]},${loc[1]}`));
             
+            // Update each cell
             for (let row = 0; row < state.height; row++) {
                 for (let col = 0; col < state.width; col++) {
-                    const cell = document.createElement('div');
-                    cell.className = 'cell';
-                    
+                    const cell = gridCells[row][col];
                     const key = `${row},${col}`;
                     const cellType = state.grid[row][col];
+                    
+                    // Clear cell content
+                    cell.innerHTML = '';
+                    cell.className = 'cell';
                     
                     // Check if this is part of the 2x2 supermarket area
                     const isBaseArea = (row <= 1 && col <= 1);
@@ -736,17 +771,6 @@
                             cell.appendChild(pendingImg);
                         }
                     }
-                    
-                    // Add click handler with closure to capture row/col
-                    (function(r, c) {
-                        cell.addEventListener('click', function(e) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleCellClick(r, c);
-                        });
-                    })(row, col);
-                    
-                    gridEl.appendChild(cell);
                 }
             }
         }
@@ -774,6 +798,7 @@
         }
         
         function resetSimulation() {
+            gridInitialized = false;
             socket.emit('reset');
         }
     </script>
